@@ -1,0 +1,69 @@
+FROM oraclelinux:7-slim as builder
+
+ARG release=19
+ARG update=5
+
+RUN yum -y install oracle-release-el7 && \
+    yum -y install oracle-instantclient${release}.${update}-basiclite
+
+RUN rm -rf /usr/lib/oracle/${release}.${update}/client64/bin
+WORKDIR /usr/lib/oracle/${release}.${update}/client64/lib/
+RUN rm -rf *jdbc* *occi* *mysql* *jar
+
+#####################################
+########## Development STAGE #########
+#####################################
+FROM node:14-alpine AS development
+
+ENV NODE_ENV=development
+# Set the default working directory for the app
+# It is a best practice to use the /usr/src/app directory
+WORKDIR /usr/src/app
+# Copy package.json, yarn.lock
+# Copying this separately prevents re-running npm install on every code change.
+COPY yarn.lock package.json ./
+# Install dependencies.
+RUN yarn install --development
+# Bundle app source
+COPY . .
+RUN yarn build
+
+ENTRYPOINT ["node", "dist/main"]
+
+#####################################
+########## Dependencies STAGE #######
+#####################################
+FROM node:14-alpine AS deps
+ARG NODE_ENV=production
+ENV NODE_ENV=${NODE_ENV}
+
+# Set the user to use when running this image
+# Non previlage mode for better security (this user comes with official NodeJS image).
+# USER node
+# Set the default working directory for the app
+# It is a best practice to use the /usr/src/app directory
+WORKDIR /deps
+# Copy package.json, package-lock.json
+# Copying this separately prevents re-running npm install on every code change.
+COPY  yarn.lock package.json ./
+# Install dependencies.
+RUN yarn install --production
+
+#####################################
+########## Production STAGE #########
+#####################################
+FROM node:12.9.1-buster-slim AS production
+
+# Copy the Instant Client libraries, licenses and config file from the previous image
+COPY --from=builder /usr/lib/oracle /usr/lib/oracle
+COPY --from=builder /usr/share/oracle /usr/share/oracle
+COPY --from=builder /etc/ld.so.conf.d/oracle-instantclient.conf /etc/ld.so.conf.d/oracle-instantclient.conf
+
+RUN apt-get update && apt-get -y upgrade && apt-get -y dist-upgrade && apt-get install -y libaio1 && \
+    apt-get -y autoremove && apt-get -y clean && \
+    ldconfig
+
+COPY --from=development /usr/src/app/dist /dist
+COPY --from=deps /deps /
+
+ENTRYPOINT ["node", "dist/main"]

@@ -1,0 +1,58 @@
+---
+stages:
+  - build
+  - test
+  - deploy
+  - cleanup
+
+variables:
+  RELEASE_IMAGE: "$CI_REGISTRY_IMAGE/$application_name:latest"
+  TEST_IMAGE: "$CI_REGISTRY_IMAGE/$application_name:$CI_COMMIT_SHORT_SHA"
+  branch_name: "develop"
+  CD_CHART_REPO: "gitops"
+  CD_CHART_REPO_URL: "git@gitlab.com:vaibhav.satam/$CD_CHART_REPO.git"
+  CD_MANIFEST_FILE: "$application_name.values.yaml"
+  TAG: "$CI_COMMIT_SHORT_SHA"
+
+
+before_script:
+  - "echo $CI_REGISTRY "
+  - "echo $CI_REGISTRY_IMAGE "
+  - "echo $CI_DEPLOY_PASSWORD | docker login $CI_REGISTRY -u $CI_DEPLOY_USER --password-stdin"
+
+
+after_script:
+  - "docker image prune -f "
+
+clone_and_build_Image:
+  stage: build
+  tags:
+    - docker
+    - shell
+  script:
+    - "git clone --branch $branch_name $CI_REPOSITORY_URL"
+    - "cd $CI_PROJECT_NAME"
+    - "echo $CI_COMMIT_SHORT_SHA "
+    - ". ~/.nvm/nvm.sh"
+    - "yarn format"
+    - "docker pull $RELEASE_IMAGE  || true"
+    - "docker build --cache-from $RELEASE_IMAGE -f Dockerfile.prod -t $TEST_IMAGE ."
+    - "docker push $TEST_IMAGE"
+    - "docker tag $TEST_IMAGE $RELEASE_IMAGE "
+    - "docker push $RELEASE_IMAGE"
+
+test:
+  stage: test
+  tags:
+    - docker
+    - shell
+  script:
+    - "docker pull $TEST_IMAGE"
+
+cleanup:
+  stage: cleanup
+  tags:
+    - docker
+    - shell
+  script:
+    - "docker rmi $TEST_IMAGE"
